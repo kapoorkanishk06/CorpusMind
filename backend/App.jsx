@@ -1,5 +1,5 @@
 import logo from './assets/corpusmindlogo.png'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import reactLogo from './assets/react.svg'
 import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
@@ -11,6 +11,8 @@ import GooeyNav from './components/GooeyNav.jsx'
 import MagicBento from './components/MagicBento.jsx'
 import SpotlightCard from './components/SpotlightCard.jsx';
 
+const API = "http://localhost:8000"; // ← ADDED
+
 const handleAnimationComplete = () => {
   console.log('All letters have animated!');
 };
@@ -21,81 +23,64 @@ const items = [
   { label: "About", href: "#about" },
 ];
 
-const DEMO_RESPONSES = {
-  "What is the minimum attendance requirement?": {
-    answer: "Students must maintain 75% attendance in all courses to be eligible for examinations, except in cases of approved medical leave [Student_Handbook.pdf, p.12]. However, Engineering enforces a stricter 80% for lab sessions [Engineering_Regulations.pdf, p.4].",
-    sources: ["Student_Handbook.pdf", "Engineering_Regulations.pdf", "Academic_Policy_2024.docx"],
-    conflict: "Attendance_Policy.pdf — Minimum attendance = 75%\n\nAcademic_Regulations.pdf — Minimum attendance = 80%",
-  },
-  "Which policy was updated most recently?": {
-    answer: "The Leave Policy v2.3 was updated most recently, on March 14, 2024 [Leave_Policy_v2.3.pdf, p.1]. Key changes include an increase in casual leave from 10 to 12 days.",
-    sources: ["Leave_Policy_v2.3.pdf", "HR_Handbook.pdf"],
-    conflict: null,
-  },
-  "Show conflicting leave policies": {
-    answer: "Two conflicting leave policies were found:\n\nHR_Handbook.pdf [p.7] states employees are entitled to 12 days casual leave.\nLeave_Policy_v2.3.pdf [p.2] states 10 days casual leave.\n\nThe HR Handbook appears outdated — last revised 2021 vs Leave Policy updated 2024.",
-    sources: ["HR_Handbook.pdf", "Leave_Policy_v2.3.pdf", "Employee_Guide.docx"],
-    conflict: "HR_Handbook.pdf — Casual leave = 12 days/year\n\nLeave_Policy_v2.3.pdf — Casual leave = 10 days/year",
-  },
-  "What is the reimbursement limit?": {
-    answer: "The travel reimbursement limit is ₹15,000 per trip for domestic travel [Finance_Policy_2023.pdf, p.9]. International travel requires pre-approval and is capped at ₹1,20,000 [Finance_Policy_2023.pdf, p.11].",
-    sources: ["Finance_Policy_2023.pdf", "Travel_Guidelines.pdf"],
-    conflict: null,
-  },
-};
-
-const DEFAULT_RESPONSE = {
-  answer: "Based on the indexed documents, the Student Handbook [Student_Handbook.pdf, p.1] serves as the primary reference for all academic policies. Cross-referencing with department-specific guidelines is recommended.",
-  sources: ["Student_Handbook.pdf", "Academic_Policy_2024.docx"],
-  conflict: null,
-};
-
-// ← ADDED: Multi-step loading phases
-const LOADING_PHASES = [
-  "Scanning 12,408 documents...",
-  "Vectorizing query using Gemini...",
-  "Cross-referencing institutional policies...",
-  "Synthesizing final answer..."
-];
-
 function App() {
   const [page, setPage] = useState("home")
 
+  // ← ADDED: state for backend responses
   const [query, setQuery] = useState("")
   const [loading, setLoading] = useState(false)
-  const [loadingStep, setLoadingStep] = useState(0) // ← ADDED: state for loading phase
-  const [result, setResult] = useState(null)
+  const [answer, setAnswer] = useState(null)
+  const [answerSources, setAnswerSources] = useState([])
+  const [conflicts, setConflicts] = useState(null)
+  const [uploading, setUploading] = useState(false)
   const [uploadMsg, setUploadMsg] = useState("")
 
-  const handleUpload = (e) => {
+  // ← ADDED: upload handler
+  const handleUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    setUploadMsg("⏳ Indexing...");
-    setTimeout(() => {
-      setUploadMsg(`✅ "${file.name}" indexed (${Math.floor(Math.random() * 80) + 20} chunks)`);
-    }, 2000);
+    setUploading(true);
+    setUploadMsg("Uploading & indexing...");
+    const form = new FormData();
+    form.append("file", file);
+    try {
+      const res = await fetch(`${API}/ingest/file`, { method: "POST", body: form });
+      const data = await res.json();
+      setUploadMsg(res.ok ? `✅ "${data.filename}" indexed (${data.chunks_indexed} chunks)` : `❌ ${data.detail}`);
+    } catch {
+      setUploadMsg("❌ Could not reach backend. Is it running?");
+    }
+    setUploading(false);
   };
 
-  const handleAsk = (q = query) => {
+  // ← ADDED: ask handler
+  const handleAsk = async (q = query) => {
     if (!q.trim()) return;
     setQuery(q);
     setLoading(true);
-    setResult(null);
-    setLoadingStep(0);
-
-    // ← ADDED: cycle through loading phases to fake heavy reasoning
-    setTimeout(() => setLoadingStep(1), 500);
-    setTimeout(() => setLoadingStep(2), 1000);
-    setTimeout(() => setLoadingStep(3), 1600);
-
-    setTimeout(() => {
-      setResult(DEMO_RESPONSES[q] || DEFAULT_RESPONSE);
-      setLoading(false);
-    }, 2200);
+    setAnswer(null);
+    setConflicts(null);
+    setAnswerSources([]);
+    try {
+      const [askRes, conflictRes] = await Promise.all([
+        fetch(`${API}/ask/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ question: q }) }),
+        fetch(`${API}/conflicts/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ topic: q, top_k: 8 }) })
+      ]);
+      const askData = await askRes.json();
+      const conflictData = await conflictRes.json();
+      setAnswer(askData.answer);
+      setAnswerSources([...new Set((askData.sources || []).map(s => s.filename))]);
+      const ct = conflictData.conflicts || "";
+      if (!ct.toLowerCase().includes("no conflict")) setConflicts(ct);
+    } catch {
+      setAnswer("❌ Could not reach backend. Make sure it's running on localhost:8000.");
+    }
+    setLoading(false);
   };
 
   return (
     <>
+
       {/* Background Layer */}
       <div
         style={{
@@ -144,10 +129,22 @@ function App() {
         />
       </div>
 
+      {/* Click Spark */}
+      {/*<ClickSpark
+        sparkColor="#ffffff"
+        sparkSize={10}
+        sparkRadius={15}
+        sparkCount={8}
+        duration={400}
+      >
+      </ClickSpark>*/}
+
+      {/* ← ADDED: hidden file input */}
       <input id="fileUpload" type="file" accept=".pdf,.docx" style={{ display: 'none' }} onChange={handleUpload} />
 
       {page === "home" && (
         <>
+
           {/* Split Text */}
           <div
             style={{
@@ -226,7 +223,7 @@ function App() {
             />
           </div>
 
-          {/* Spotlight Card */}
+          {/* Spotlight Card — ← MODIFIED: shows upload status */}
           <div
             onClick={() => document.getElementById('fileUpload').click()}
             style={{
@@ -240,7 +237,7 @@ function App() {
             <SpotlightCard className="custom-spotlight-card" spotlightColor="rgba(132, 0, 255, 0.25)">
               <h2><b>↟ UPLOAD DOCUMENTS</b></h2>
               <br></br>
-              <p>{uploadMsg || "Build your institution's knowledge base from PDFs, DOCX files, emails and policies."}</p>
+              <p>{uploading ? "⏳ Indexing..." : uploadMsg || "Build your institution's knowledge base from PDFs, DOCX files, emails and policies."}</p>
             </SpotlightCard>
           </div>
         </>
@@ -283,14 +280,7 @@ function App() {
               Find answers hidden across thousands of documents.
             </p>
 
-            {/* ← ADDED: Corpus Stats Banner */}
-            <div style={{ display: 'flex', justifyContent: 'center', gap: '35px', color: '#888', fontSize: '0.9rem', marginBottom: '25px', fontFamily: 'monospace' }}>
-                <span>Docs Indexed: <strong style={{color: '#fff'}}>12,408</strong></span>
-                <span>Last Sync: <strong style={{color: '#fff'}}>2 mins ago</strong></span>
-                <span>Detected Conflicts: <strong style={{color: '#ff9f43'}}>3</strong></span>
-                <span>Nodes Connected: <strong style={{color: '#fff'}}>45.2K</strong></span>
-            </div>
-
+            {/* ← MODIFIED: wired up value, onChange, onKeyDown */}
             <input
               value={query}
               onChange={e => setQuery(e.target.value)}
@@ -307,6 +297,7 @@ function App() {
               }}
             />
 
+            {/* ← MODIFIED: suggestion chips now trigger real search */}
             <div
               style={{
                 marginTop: "25px",
@@ -338,94 +329,52 @@ function App() {
               ))}
             </div>
 
-            {/* ← ADDED: Pre-Search Intelligence Widget (Only shows before searching) */}
-            {!loading && !result && (
-              <div style={{ width: "700px", margin: "40px auto", background: "#120F17", borderRadius: "15px", padding: "25px", border: "1px solid #333", textAlign: "left" }}>
-                  <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
-                    <span style={{color: '#fff', fontSize: '1.1rem', fontWeight: '500'}}>Institutional Intelligence</span>
-                    <span style={{color: '#888', cursor: 'pointer', fontSize: '1.2rem'}}>⧉</span>
-                  </div>
-                  <p style={{color: '#888', fontSize: '0.85rem', marginBottom: '15px'}}>Key Insights</p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', color: '#ddd', fontSize: '0.95rem' }}>
-                      <div style={{display: 'flex', gap: '10px'}}><span style={{color: '#ff9f43'}}>⚠</span> Attendance conflict detected</div>
-                      <div style={{display: 'flex', gap: '10px'}}><span>📄</span> Student Handbook referenced by 23 documents</div>
-                      <div style={{display: 'flex', gap: '10px'}}><span>🔄</span> Leave Policy updated 3 days ago</div>
-                      <div style={{display: 'flex', gap: '10px'}}><span>⏳</span> Scholarship deadline approaching</div>
-                      <div style={{display: 'flex', gap: '10px'}}><span>🏛</span> Procurement policy affects 4 departments</div>
-                  </div>
-              </div>
-            )}
-
-            {/* ← MODIFIED: Multi-step loading state */}
+            {/* ← MODIFIED: answer card shows real data */}
             {loading && (
-              <div style={{ marginTop: "60px", display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '15px' }}>
-                <div className="spinner" style={{ width: '30px', height: '30px', border: '3px solid rgba(255,255,255,0.1)', borderTopColor: '#00ff99', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
-                <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "1.1rem", fontFamily: 'monospace' }}>
-                  {LOADING_PHASES[loadingStep]}
-                </div>
-                <style>{`@keyframes spin { 100% { transform: rotate(360deg); } }`}</style>
+              <div style={{ marginTop: "50px", color: "rgba(255,255,255,0.6)", fontSize: "1.1rem" }}>
+                ⏳ Searching corpus and reasoning across documents...
               </div>
             )}
 
-            {result && !loading && (
+            {answer && !loading && (
               <div
                 style={{
                   width: "900px",
                   margin: "50px auto",
                   background: "#120F17",
                   borderRadius: "20px",
-                  padding: "35px",
+                  padding: "30px",
                   textAlign: "left",
-                  boxShadow: "0 10px 30px rgba(0,0,0,0.5)",
-                  border: "1px solid #222"
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px' }}>
-                    <h2 style={{ margin: 0 }}>Answer Synthesized</h2>
-                    <span style={{ color: "#00ff99", background: "rgba(0, 255, 153, 0.1)", padding: "5px 12px", borderRadius: "15px", fontSize: "0.9rem" }}>
-                      Confidence: {Math.floor(Math.random() * 5) + 94}%
-                    </span>
-                </div>
+                <h2>Answer</h2>
+                <p style={{ fontSize: "1.2rem", whiteSpace: "pre-wrap" }}>{answer}</p>
 
-                <p style={{ fontSize: "1.15rem", whiteSpace: "pre-wrap", lineHeight: "1.7", color: "#eee" }}>
-                  {result.answer}
-                </p>
-
-                <div style={{ marginTop: '30px' }}>
-                    <h3 style={{ fontSize: '1rem', color: '#888', marginBottom: '15px' }}>Referenced Sources</h3>
-                    {/* ← MODIFIED: Carousel style document badges */}
-                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {result.sources.map(s => (
-                            <div key={s} style={{ display: 'flex', alignItems: 'center', gap: '8px', background: '#1A1622', border: '1px solid #333', padding: '8px 15px', borderRadius: '8px', fontSize: '0.9rem', color: '#ccc' }}>
-                                📄 {s}
-                            </div>
-                        ))}
-                    </div>
-                </div>
+                {answerSources.length > 0 && (
+                  <>
+                    <h3>Sources</h3>
+                    <ul>{answerSources.map(s => <li key={s}>{s}</li>)}</ul>
+                  </>
+                )}
               </div>
             )}
 
-            {result?.conflict && !loading && (
+            {/* ← MODIFIED: conflict card shows real data, only when conflicts found */}
+            {conflicts && !loading && (
               <div
                 style={{
                   width: "900px",
                   margin: "20px auto",
-                  background: "rgba(255, 159, 67, 0.05)",
+                  background: "#120F17",
                   borderRadius: "20px",
                   padding: "30px",
                   textAlign: "left",
-                  border: "1px solid rgba(255, 159, 67, 0.5)",
+                  border: "1px solid #ff9f43",
                 }}
               >
-                <h2 style={{ color: '#ff9f43', display: 'flex', alignItems: 'center', gap: '10px', margin: '0 0 15px 0' }}>
-                    <span style={{ fontSize: '1.5rem' }}>⚠</span> Institutional Conflict Detected
-                </h2>
-                <p style={{ whiteSpace: "pre-wrap", color: '#ddd', lineHeight: '1.6' }}>{result.conflict}</p>
-                <div style={{ marginTop: '15px', padding: '10px', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', display: 'inline-block' }}>
-                    <p style={{ color: "#ff9f43", margin: 0, fontSize: '0.9rem', fontWeight: 'bold' }}>
-                    Action Required: Human review recommended for policy reconciliation.
-                    </p>
-                </div>
+                <h2>⚠ Conflict Detected</h2>
+                <p style={{ whiteSpace: "pre-wrap" }}>{conflicts}</p>
+                <p style={{ color: "#ff9f43" }}>Review recommended.</p>
               </div>
             )}
           </div>
@@ -513,7 +462,7 @@ function App() {
                   marginTop: "30px",
                 }}
               >
-                {["React", "Node.js", "MongoDB"].map((tech) => (
+                {["React", "Node.js", "MongoDB", "Elasticsearch"].map((tech) => (
                   <div
                     key={tech}
                     style={{
@@ -543,7 +492,7 @@ function App() {
                 <br />↓<br />
                 MongoDB Storage
                 <br />↓<br />
-                Indexing
+                Elasticsearch Indexing
                 <br />↓<br />
                 Natural Language Search
                 <br />↓<br />
@@ -553,6 +502,8 @@ function App() {
           </div>
         </>
       )}
+
+
     </>
   )
 }
