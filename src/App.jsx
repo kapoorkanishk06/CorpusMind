@@ -1,3 +1,4 @@
+const API_BASE = "http://127.0.0.1:8000";
 import logo from './assets/corpusmindlogo.png'
 import { useState, useEffect } from 'react'
 import reactLogo from './assets/react.svg'
@@ -67,33 +68,93 @@ function App() {
   const [result, setResult] = useState(null)
   const [uploadMsg, setUploadMsg] = useState("")
 
-  const handleUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    setUploadMsg("⏳ Indexing...");
-    setTimeout(() => {
-      setUploadMsg(`✅ "${file.name}" indexed (${Math.floor(Math.random() * 80) + 20} chunks)`);
-    }, 2000);
-  };
+const handleUpload = async (e) => {
+  const file = e.target.files[0];
 
-  const handleAsk = (q = query) => {
-    if (!q.trim()) return;
-    setQuery(q);
-    setLoading(true);
-    setResult(null);
-    setLoadingStep(0);
+  if (!file) return;
 
-    // ← ADDED: cycle through loading phases to fake heavy reasoning
-    setTimeout(() => setLoadingStep(1), 500);
-    setTimeout(() => setLoadingStep(2), 1000);
-    setTimeout(() => setLoadingStep(3), 1600);
+  setUploadMsg("⏳ Indexing...");
 
-    setTimeout(() => {
-      setResult(DEMO_RESPONSES[q] || DEFAULT_RESPONSE);
-      setLoading(false);
-    }, 2200);
-  };
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
 
+    const response = await fetch(
+      `${API_BASE}/ingest/file`,
+      {
+        method: "POST",
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Upload failed");
+    }
+
+    const data = await response.json();
+
+    setUploadMsg(
+      `✅ "${file.name}" indexed (${data.chunks_indexed || "?"} chunks)`
+    );
+
+  } catch (err) {
+    console.error(err);
+    setUploadMsg("❌ Upload failed");
+  }
+};
+
+ const handleAsk = async (q = query) => {
+  if (!q.trim()) return;
+
+  setQuery(q);
+  setLoading(true);
+  setResult(null);
+  setLoadingStep(0);
+
+  setTimeout(() => setLoadingStep(1), 500);
+  setTimeout(() => setLoadingStep(2), 1000);
+  setTimeout(() => setLoadingStep(3), 1500);
+
+  try {
+    const response = await fetch(
+      `${API_BASE}/ask`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: q,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    const sources =
+      data.sources?.map(
+        (s) => `${s.filename} (p.${s.page})`
+      ) || [];
+
+    setResult({
+      answer: data.answer,
+      sources,
+      conflict: null,
+    });
+
+  } catch (err) {
+
+    console.error(err);
+
+    setResult({
+      answer: "Could not connect to backend.",
+      sources: [],
+      conflict: err.message,
+    });
+  }
+
+  setLoading(false);
+};
   return (
     <>
       {/* Background Layer */}
